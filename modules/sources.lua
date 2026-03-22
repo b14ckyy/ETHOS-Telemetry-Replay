@@ -23,6 +23,8 @@
 
 local M = {}
 
+local mpi = math.pi
+
 -- ---------------------------------------------------------------------------
 -- Unit conversion helpers
 -- ---------------------------------------------------------------------------
@@ -45,7 +47,7 @@ end
 
 local function convertAttitude(v, s)
   if s.attitudeUnit == "deg" then
-    local deg = v * 180 / math.pi
+    local deg = v * 180 / mpi
     if deg > 180 then deg = deg - 360 end
     if deg < -180 then deg = deg + 360 end
     return deg
@@ -118,13 +120,13 @@ local function makeSourceInit(cfg)
       return
     end
     if type(source.unit) == "function" then
-      pcall(function() source:unit(cfg.unit) end)
+      pcall(source.unit, source, cfg.unit)
     end
     if type(source.decimals) == "function" then
-      pcall(function() source:decimals(cfg.decimals) end)
+      pcall(source.decimals, source, cfg.decimals)
     end
     if type(source.value) == "function" then
-      pcall(function() source:value(0) end)
+      pcall(source.value, source, 0)
     end
   end
 end
@@ -138,9 +140,9 @@ local function makeSourceWakeup(cfg, getSharedState)
     if cfg.isGps then
       local lat = shared.lat or 0
       local lon = shared.lon or 0
-      local ok = pcall(function() source:value(lat, lon) end)
+      local ok = pcall(source.value, source, lat, lon)
       if not ok then
-        pcall(function() source:value(lat) end)
+        pcall(source.value, source, lat)
       end
       return
     end
@@ -149,12 +151,12 @@ local function makeSourceWakeup(cfg, getSharedState)
     if cfg.convert then
       value = cfg.convert(value, shared)
     end
-    pcall(function() source:value(value) end)
+    pcall(source.value, source, value)
     if cfg.unitFn then
-      pcall(function() source:unit(cfg.unitFn(shared)) end)
+      pcall(source.unit, source, cfg.unitFn(shared))
     end
     if cfg.decimalsFn then
-      pcall(function() source:decimals(cfg.decimalsFn(shared)) end)
+      pcall(source.decimals, source, cfg.decimalsFn(shared))
     end
   end
 end
@@ -165,14 +167,12 @@ function M.registerSources(getSharedState)
   end
   for i = 1, #M.sourceConfig do
     local cfg = M.sourceConfig[i]
-    pcall(function()
-      system.registerSource({
-        key = cfg.key,
-        name = cfg.name,
-        init = makeSourceInit(cfg),
-        wakeup = makeSourceWakeup(cfg, getSharedState)
-      })
-    end)
+    pcall(system.registerSource, system, {
+      key = cfg.key,
+      name = cfg.name,
+      init = makeSourceInit(cfg),
+      wakeup = makeSourceWakeup(cfg, getSharedState)
+    })
   end
 end
 

@@ -113,7 +113,7 @@ All menu actions are deferred to `wakeup()` to stay within the ETHOS instruction
 The widget view shows:
 
 - active file and detected format
-- status line with running/paused state, progress %, log timestamp, speed
+- status line with running/paused state, timestamp-based progress %, log timestamp, speed
 - GPS coordinates (decimal or DMS depending on setting)
 - altitude, ground speed, COG, satellites, vertical speed
 - RSSI, RQly, TQly, receiver voltage
@@ -205,7 +205,27 @@ Notes:
 
 ## Buffered I/O
 
-The replay engine reads CSV data in batches of 50 parsed rows. This avoids reading row-by-row (which would be too slow) and avoids loading the entire file into memory (which could exceed ETHOS limits). A safety cap of 500 raw line reads per fill cycle prevents runaway loops in files with very sparse valid data.
+The replay engine reads CSV data in batches of 10 parsed rows per buffer fill. This avoids reading row-by-row (which would be too slow) and avoids loading the entire file into memory (which could exceed ETHOS limits). A safety cap of 50 raw line reads per fill cycle prevents runaway loops in files with very sparse valid data. At most 10 rows are consumed per `wakeup()` cycle to stay within ETHOS instruction count limits.
+
+## Byte-based seeking
+
+Jumps (start offset, +1 min, +5 min) use `fh:seek()` to skip forward by a calculated byte offset instead of parsing rows one by one. On startup the engine measures the byte length and timestamp interval of a data row. The jump distance in bytes is then:
+
+```
+bytesToSkip = (deltaMs / msPerRow) * bytesPerLine
+```
+
+After seeking, the partial line at the landing position is discarded and the next full line is parsed. This makes jumps effectively instantaneous regardless of log size. If the byte-seek overshoots or metrics are unavailable, the engine falls back to incremental row-by-row seeking.
+
+## Progress display
+
+The percentage shown in the status line is timestamp-based rather than row-count-based. On startup, the engine reads the last line of the CSV via `fh:seek("end")` to determine the end timestamp. Progress is then calculated as:
+
+```
+pct = (currentTimestamp - startTimestamp) / (endTimestamp - startTimestamp) × 100
+```
+
+This avoids a full row count scan and works correctly after jumps.
 
 ## Internal design
 
@@ -220,6 +240,19 @@ Each virtual sensor is registered with its own bound `init` and `wakeup` callbac
 ### ETHOS instruction count safety
 
 All menu actions are deferred to `wakeup()` via flags (`pendingStart`, `pendingJump`). The `wakeup()` callback benefits from ETHOS preemption support (suspend/resume), while `menu()` does not. Heavy operations in `menu()` would trigger the "Max instructions count reached" error.
+
+### Performance optimizations for STM32H7
+
+The code is tuned for the instruction count and memory constraints of the ETHOS radio hardware:
+
+- Frequently used library functions (`math.floor`, `string.find`, `string.byte`, etc.) are localized as upvalues for ~30% faster access
+- `safeNumber()` uses a fast path via direct `tonumber()` with comma fallback only when needed
+- `atan2` resolution is cached once at module load time instead of per call
+- Candidate column name tables in `updateFromRow()` are pre-allocated at module level (avoids ~170 table allocations per wakeup cycle)
+- `pcall` calls in source wakeups use `pcall(fn, ...)` form instead of closure wrappers (avoids 18 closure allocations per cycle)
+- Haversine calculation is skipped when GPS coordinates haven't changed
+- `parseGpsLatLon()` uses `string.find` instead of `gmatch` to avoid iterator closures
+- Format strings for `string.format` are pre-cached in a lookup table
 
 ### Module loading
 
@@ -240,4 +273,3 @@ ETHOS does not support standard Lua `require()`. Modules are loaded via `loadfil
 - optional derived home bearing or distance-to-waypoint calculations
 - replay pause, scrub, and jump controls in the widget UI
 - support for additional CSV dialects
-- optional module split into parser, replay engine, and ETHOS binding layers

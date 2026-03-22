@@ -179,6 +179,13 @@ local config = assert(loadfile(scriptDir .. "modules/config.lua"))()
 
 local safeNumber = csv.safeNumber
 
+-- Localize frequently used library functions
+local mfloor = math.floor
+local mabs = math.abs
+local mmax = math.max
+local sformat = string.format
+local mpi = math.pi
+
 -- TODO: enable ETHOS system log scanning once ETHOS log parsing is implemented
 -- local ETHOS_LOG_DIR = "/logs/"
 -- local function listEthosLogFiles()
@@ -189,12 +196,22 @@ local safeNumber = csv.safeNumber
 -- Display formatting
 -- ---------------------------------------------------------------------------
 
+-- Pre-cached format strings for known decimal counts
+local FMT_CACHE = {}
+for d = 0, 6 do
+  FMT_CACHE[d] = "%." .. tostring(d) .. "f"
+end
+
 local function formatFixed(value, decimals)
   local number = safeNumber(value, 0)
   if decimals == nil or decimals <= 0 then
-    return tostring(math.floor(number + 0.5))
+    return tostring(mfloor(number + 0.5))
   end
-  return string.format("%." .. tostring(decimals) .. "f", number)
+  local fmt = FMT_CACHE[decimals]
+  if fmt == nil then
+    fmt = "%." .. tostring(decimals) .. "f"
+  end
+  return sformat(fmt, number)
 end
 
 local function formatReplayValue(field)
@@ -204,14 +221,14 @@ local function formatReplayValue(field)
   if field == "rxbatt" or field == "curr" then
     return formatFixed(state[field], 2)
   end
-  return tostring(math.floor(safeNumber(state[field], 0) + 0.5))
+  return tostring(mfloor(safeNumber(state[field], 0) + 0.5))
 end
 
 local function formatDms(decimal, isLat)
-  local abs = math.abs(decimal)
-  local deg = math.floor(abs)
+  local abs = mabs(decimal)
+  local deg = mfloor(abs)
   local minFull = (abs - deg) * 60
-  local min = math.floor(minFull)
+  local min = mfloor(minFull)
   local sec = (minFull - min) * 60
   local dir
   if isLat then
@@ -219,33 +236,39 @@ local function formatDms(decimal, isLat)
   else
     dir = decimal >= 0 and "E" or "W"
   end
-  return string.format("%d\176%02d'%04.1f\"%s", deg, min, sec, dir)
+  return sformat("%d\176%02d'%04.1f\"%s", deg, min, sec, dir)
 end
 
 local function formatSpeedLabel()
   local s = state.speed or 1
-  if s == math.floor(s) then
-    return tostring(math.floor(s)) .. "x"
+  if s == mfloor(s) then
+    return tostring(mfloor(s)) .. "x"
   end
-  return string.format("%.2gx", s)
+  return sformat("%.2gx", s)
 end
 
 local function formatLogTimestamp()
-  if state.baseLogMs == nil or state.nextRowMs == nil then
+  if state.origBaseLogMs == nil or state.nextRowMs == nil then
     return "--:--"
   end
-  local elapsedSec = math.floor((state.nextRowMs - state.baseLogMs) / 1000)
+  local elapsedSec = mfloor((state.nextRowMs - state.origBaseLogMs) / 1000)
   if elapsedSec < 0 then elapsedSec = 0 end
-  local mm = math.floor(elapsedSec / 60)
+  local mm = mfloor(elapsedSec / 60)
   local ss = elapsedSec % 60
-  return string.format("%02d:%02d", mm, ss)
+  return sformat("%02d:%02d", mm, ss)
 end
 
 local function formatProgressPct()
-  if state.rowCount == nil or state.rowCount == 0 then
+  if state.origBaseLogMs == nil or state.endLogMs == nil or state.nextRowMs == nil then
     return ""
   end
-  local pct = math.floor((state.rowIndex or 0) / state.rowCount * 100)
+  local total = state.endLogMs - state.origBaseLogMs
+  if total <= 0 then
+    return ""
+  end
+  local current = state.nextRowMs - state.origBaseLogMs
+  local pct = mfloor(current / total * 100)
+  if pct < 0 then pct = 0 end
   if pct > 100 then pct = 100 end
   return tostring(pct) .. "%"
 end
@@ -305,8 +328,8 @@ local function buildTelemetryRows()
   local prLabel = "P/R rad"
   local prDec = 3
   if state.attitudeUnit == "deg" then
-    pitchVal = pitchVal * 180 / math.pi
-    rollVal = rollVal * 180 / math.pi
+    pitchVal = pitchVal * 180 / mpi
+    rollVal = rollVal * 180 / mpi
     prLabel = "P/R deg"
     prDec = 1
   end
@@ -365,7 +388,7 @@ local function paint()
   local w, h = lcd.getWindowSize()
   local rows = buildTelemetryRows()
   local leftX = 4
-  local valueX = math.floor(w * 0.46)
+  local valueX = mfloor(w * 0.46)
   local y = 4
   local rowHeight = 12
 
@@ -416,7 +439,7 @@ local function configure(widgetInstance)
 
   line = form.addLine("Start offset (s)")
   form.addNumberField(line, nil, 0, 3600,
-    function() return math.floor(state.startOffsetSec or 0) end,
+    function() return mfloor(state.startOffsetSec or 0) end,
     function(value) state.startOffsetSec = value; saveSettings() end
   )
 
