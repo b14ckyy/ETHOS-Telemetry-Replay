@@ -1,5 +1,5 @@
 -- EthosTelemetryReplay
--- Copyright (C) 2026 Marc Hoffmann (GitHub: b14ckyy)
+-- Copyright (C) 2026 Marc Hoffmann (https://github.com/b14ckyy)
 --
 -- This program is free software: you can redistribute it and/or modify
 -- it under the terms of the GNU General Public License as published by
@@ -39,6 +39,87 @@ local formatChoices = {
   {"generic", 3},
 }
 
+local speedChoices = {
+  {"0.25x", 1},
+  {"0.5x",  2},
+  {"1x",    3},
+  {"2x",    4},
+  {"3x",    5},
+  {"4x",    6},
+  {"5x",    7},
+}
+local speedValues = { 0.25, 0.5, 1, 2, 3, 4, 5 }
+
+local rateChoices = {
+  {"0.5 Hz", 1},
+  {"1 Hz",   2},
+  {"2 Hz",   3},
+  {"5 Hz",   4},
+}
+local rateValues = { 0.5, 1, 2, 5 }
+
+local gpsFormatChoices = {
+  {"Decimal", 1},
+  {"DMS", 2},
+}
+local gpsFormatValues = {"decimal", "dms"}
+
+local altUnitChoices = {
+  {"m", 1},
+  {"ft", 2},
+}
+local altUnitValues = {"m", "ft"}
+
+local speedUnitChoices = {
+  {"km/h", 1},
+  {"m/s", 2},
+  {"knots", 3},
+}
+local speedUnitValues = {"kmh", "ms", "knots"}
+
+local vspdUnitChoices = {
+  {"m/s", 1},
+  {"ft/s", 2},
+}
+local vspdUnitValues = {"ms", "fts"}
+
+local attitudeUnitChoices = {
+  {"rad", 1},
+  {"deg", 2},
+}
+local attitudeUnitValues = {"rad", "deg"}
+
+local function getRateChoiceIndex()
+  local r = state.maxSensorRate or 5
+  for i = 1, #rateValues do
+    if rateValues[i] == r then return i end
+  end
+  return 4 -- default 5 Hz
+end
+
+local function setRateChoice(index)
+  state.maxSensorRate = rateValues[index] or 5
+end
+
+local function choiceIndex(values, current, default)
+  for i = 1, #values do
+    if values[i] == current then return i end
+  end
+  return default or 1
+end
+
+local function getSpeedChoiceIndex()
+  local s = state.speed or 1
+  for i = 1, #speedValues do
+    if speedValues[i] == s then return i end
+  end
+  return 3 -- default 1x
+end
+
+local function setSpeedChoice(index)
+  state.speed = speedValues[index] or 1
+end
+
 local function getFormatChoiceIndex()
   if state.format == "edgetx" then
     return 2
@@ -69,72 +150,9 @@ local function getTimeMs()
   return os.clock() * 1000
 end
 
-local function safeNumber(value, default)
-  if value == nil then
-    return default or 0
-  end
-  local text = tostring(value):gsub(",", ".")
-  local num = tonumber(text)
-  if num == nil then
-    return default or 0
-  end
-  return num
-end
-
-local function safeAtan2(y, x)
-  local atan2Compat = rawget(math, "atan2")
-  if atan2Compat ~= nil then
-    return atan2Compat(y, x)
-  end
-  if math.atan ~= nil then
-    local ok, value = pcall(math.atan, y, x)
-    if ok and type(value) == "number" then
-      return value
-    end
-    if x > 0 then
-      return math.atan(y / x)
-    end
-    if x < 0 and y >= 0 then
-      return math.atan(y / x) + math.pi
-    end
-    if x < 0 and y < 0 then
-      return math.atan(y / x) - math.pi
-    end
-    if x == 0 and y > 0 then
-      return math.pi / 2
-    end
-    if x == 0 and y < 0 then
-      return -math.pi / 2
-    end
-  end
-  return 0
-end
-
-local function parseCsvLine(line)
-  local out = {}
-  local field = ""
-  local inQuotes = false
-  local i = 1
-  while i <= #line do
-    local c = line:sub(i, i)
-    if c == '"' then
-      if inQuotes and line:sub(i + 1, i + 1) == '"' then
-        field = field .. '"'
-        i = i + 1
-      else
-        inQuotes = not inQuotes
-      end
-    elseif c == "," and not inQuotes then
-      out[#out + 1] = field
-      field = ""
-    else
-      field = field .. c
-    end
-    i = i + 1
-  end
-  out[#out + 1] = field
-  return out
-end
+-- ---------------------------------------------------------------------------
+-- Module loading
+-- ---------------------------------------------------------------------------
 
 local function getScriptDir()
   if debug ~= nil and type(debug.getinfo) == "function" then
@@ -153,117 +171,23 @@ local function getScriptDir()
   return "/scripts/TelemetryReplay/"
 end
 
-local function listLogFiles(dir)
-  local files = {}
-  local ok, lfs = pcall(require, "lfs")
-  if ok and lfs and lfs.dir then
-    for name in lfs.dir(dir) do
-      if name ~= "." and name ~= ".." then
-        if name:lower():match("%.csv$") then
-          files[#files + 1] = name
-        end
-      end
-    end
-  end
-  table.sort(files)
-  return files
-end
+local scriptDir = getScriptDir()
+local csv = assert(loadfile(scriptDir .. "modules/csv.lua"))()
+local sources = assert(loadfile(scriptDir .. "modules/sources.lua"))()
+local replay = assert(loadfile(scriptDir .. "modules/replay.lua"))()
+local config = assert(loadfile(scriptDir .. "modules/config.lua"))()
 
-local function buildHeaderMap(headers)
-  local map = {}
-  local seen = {}
-  for i = 1, #headers do
-    local base = headers[i]:gsub("^%s+", ""):gsub("%s+$", "")
-    if seen[base] then
-      seen[base] = seen[base] + 1
-      base = base .. "_" .. tostring(seen[base])
-    else
-      seen[base] = 1
-    end
-    map[base] = i
-  end
-  return map
-end
+local safeNumber = csv.safeNumber
 
-local function parseDateTimeMs(dateText, timeText)
-  if dateText == nil or timeText == nil then
-    return nil
-  end
-  local y, m, d = dateText:match("(%d+)%-(%d+)%-(%d+)")
-  local hh, mm, ss, frac = timeText:match("(%d+):(%d+):(%d+)%.?(%d*)")
-  if y == nil then
-    return nil
-  end
-  local ms = 0
-  if frac ~= nil and frac ~= "" then
-    if #frac == 1 then
-      ms = tonumber(frac) * 100
-    elseif #frac == 2 then
-      ms = tonumber(frac) * 10
-    else
-      ms = tonumber(frac:sub(1, 3)) or 0
-    end
-  end
-  local sec = os.time({
-    year = tonumber(y),
-    month = tonumber(m),
-    day = tonumber(d),
-    hour = tonumber(hh),
-    min = tonumber(mm),
-    sec = tonumber(ss)
-  })
-  if sec == nil then
-    return nil
-  end
-  return sec * 1000 + ms
-end
+-- TODO: enable ETHOS system log scanning once ETHOS log parsing is implemented
+-- local ETHOS_LOG_DIR = "/logs/"
+-- local function listEthosLogFiles()
+--   return csv.listLogFiles(ETHOS_LOG_DIR)
+-- end
 
-local function getRowTimeMs(row, header, previous)
-  local idx = header["timestamp_ms"]
-  if idx ~= nil then
-    local ts = safeNumber(row[idx], -1)
-    if ts >= 0 then
-      return ts
-    end
-  end
-
-  local dateIdx = header["Date"]
-  local timeIdx = header["Time"]
-  if dateIdx ~= nil and timeIdx ~= nil then
-    local ts = parseDateTimeMs(row[dateIdx], row[timeIdx])
-    if ts ~= nil then
-      return ts
-    end
-  end
-
-  return (previous or 0) + 100
-end
-
-local function parseGpsLatLon(text)
-  if text == nil then
-    return 0, 0
-  end
-  local parts = {}
-  for p in tostring(text):gmatch("[^%s]+") do
-    parts[#parts + 1] = p
-  end
-  if #parts >= 2 then
-    return safeNumber(parts[1], 0), safeNumber(parts[2], 0)
-  end
-  return 0, 0
-end
-
-local function haversine(lat1, lon1, lat2, lon2)
-  local r = 6371000
-  local rad = math.rad
-  local dLat = rad(lat2 - lat1)
-  local dLon = rad(lon2 - lon1)
-  local a = math.sin(dLat / 2) * math.sin(dLat / 2)
-    + math.cos(rad(lat1)) * math.cos(rad(lat2))
-    * math.sin(dLon / 2) * math.sin(dLon / 2)
-  local c = 2 * safeAtan2(math.sqrt(a), math.sqrt(1 - a))
-  return r * c
-end
+-- ---------------------------------------------------------------------------
+-- Display formatting
+-- ---------------------------------------------------------------------------
 
 local function formatFixed(value, decimals)
   local number = safeNumber(value, 0)
@@ -274,33 +198,129 @@ local function formatFixed(value, decimals)
 end
 
 local function formatReplayValue(field)
-  if field == "lat" or field == "lon" then
-    return formatFixed(state[field], 6)
-  end
-  if field == "altM" or field == "gspdKmh" or field == "cog" or field == "homeDist" then
+  if field == "cog" or field == "homeDist" then
     return formatFixed(state[field], 1)
   end
-  if field == "vspd" or field == "rxbatt" or field == "curr" then
+  if field == "rxbatt" or field == "curr" then
     return formatFixed(state[field], 2)
-  end
-  if field == "pitch" or field == "roll" then
-    return formatFixed(state[field], 3)
   end
   return tostring(math.floor(safeNumber(state[field], 0) + 0.5))
 end
 
+local function formatDms(decimal, isLat)
+  local abs = math.abs(decimal)
+  local deg = math.floor(abs)
+  local minFull = (abs - deg) * 60
+  local min = math.floor(minFull)
+  local sec = (minFull - min) * 60
+  local dir
+  if isLat then
+    dir = decimal >= 0 and "N" or "S"
+  else
+    dir = decimal >= 0 and "E" or "W"
+  end
+  return string.format("%d\176%02d'%04.1f\"%s", deg, min, sec, dir)
+end
+
+local function formatSpeedLabel()
+  local s = state.speed or 1
+  if s == math.floor(s) then
+    return tostring(math.floor(s)) .. "x"
+  end
+  return string.format("%.2gx", s)
+end
+
+local function formatLogTimestamp()
+  if state.baseLogMs == nil or state.nextRowMs == nil then
+    return "--:--"
+  end
+  local elapsedSec = math.floor((state.nextRowMs - state.baseLogMs) / 1000)
+  if elapsedSec < 0 then elapsedSec = 0 end
+  local mm = math.floor(elapsedSec / 60)
+  local ss = elapsedSec % 60
+  return string.format("%02d:%02d", mm, ss)
+end
+
+local function formatProgressPct()
+  if state.rowCount == nil or state.rowCount == 0 then
+    return ""
+  end
+  local pct = math.floor((state.rowIndex or 0) / state.rowCount * 100)
+  if pct > 100 then pct = 100 end
+  return tostring(pct) .. "%"
+end
+
+local function buildStatusText()
+  if not state.running then
+    return "Stopped"
+  end
+  local pct = formatProgressPct()
+  local ts = formatLogTimestamp()
+  local spd = formatSpeedLabel()
+  local parts = state.paused and "Paused" or "Running"
+  if pct ~= "" then parts = parts .. " " .. pct end
+  parts = parts .. " " .. ts .. " " .. spd
+  return parts
+end
+
 local function buildTelemetryRows()
+  -- GPS display
+  local gpsText
+  if state.gpsFormat == "dms" then
+    gpsText = formatDms(state.lat or 0, true) .. " " .. formatDms(state.lon or 0, false)
+  else
+    gpsText = formatFixed(state.lat, 6) .. " / " .. formatFixed(state.lon, 6)
+  end
+
+  -- Altitude
+  local altVal = safeNumber(state.altM, 0)
+  local altLabel = "Alt m"
+  if state.altUnit == "ft" then
+    altVal = altVal * 3.28084
+    altLabel = "Alt ft"
+  end
+
+  -- Speed
+  local spdVal = safeNumber(state.gspdKmh, 0)
+  local spdLabel = "GSpd km/h"
+  if state.speedUnit == "ms" then
+    spdVal = spdVal / 3.6
+    spdLabel = "GSpd m/s"
+  elseif state.speedUnit == "knots" then
+    spdVal = spdVal / 1.852
+    spdLabel = "GSpd kn"
+  end
+
+  -- VSpd
+  local vspdVal = safeNumber(state.vspd, 0)
+  local vspdLabel = "VSpd m/s"
+  if state.vspdUnit == "fts" then
+    vspdVal = vspdVal * 3.28084
+    vspdLabel = "VSpd ft/s"
+  end
+
+  -- Pitch/Roll
+  local pitchVal = safeNumber(state.pitch, 0)
+  local rollVal = safeNumber(state.roll, 0)
+  local prLabel = "P/R rad"
+  local prDec = 3
+  if state.attitudeUnit == "deg" then
+    pitchVal = pitchVal * 180 / math.pi
+    rollVal = rollVal * 180 / math.pi
+    prLabel = "P/R deg"
+    prDec = 1
+  end
+
   return {
     { "File", state.logFile or "-" },
     { "Format", state.formatActive or state.format or "-" },
-    { "Status", state.running and (state.paused and "Paused" or "Running") or "Stopped" },
-    { "Lat", formatReplayValue("lat") },
-    { "Lon", formatReplayValue("lon") },
-    { "Alt m", formatReplayValue("altM") },
-    { "GSpd km/h", formatReplayValue("gspdKmh") },
+    { "Status", buildStatusText() },
+    { "GPS", gpsText },
+    { altLabel, formatFixed(altVal, 1) },
+    { spdLabel, formatFixed(spdVal, 1) },
     { "COG deg", formatReplayValue("cog") },
     { "Sats", formatReplayValue("sats") },
-    { "VSpd m/s", formatReplayValue("vspd") },
+    { vspdLabel, formatFixed(vspdVal, 2) },
     { "RSSI", formatReplayValue("rssi") },
     { "RQly", formatReplayValue("rqly") },
     { "TQly", formatReplayValue("tqly") },
@@ -309,288 +329,8 @@ local function buildTelemetryRows()
     { "Capa mAh", formatReplayValue("capa") },
     { "Bat %", formatReplayValue("batpct") },
     { "Home m", formatReplayValue("homeDist") },
-    { "Pitch rad", formatReplayValue("pitch") },
-    { "Roll rad", formatReplayValue("roll") },
+    { prLabel, formatFixed(pitchVal, prDec) .. " / " .. formatFixed(rollVal, prDec) },
   }
-end
-
-local function resetReplayState()
-  state.fileHandle = nil
-  state.header = nil
-  state.baseLogMs = nil
-  state.nextRowMs = nil
-  state.running = false
-  state.paused = false
-  state.startMs = nil
-  state.lastUiRefreshMs = 0
-  state.homeLat = nil
-  state.homeLon = nil
-end
-
-local function detectFormat(header)
-  if state.format ~= nil and state.format ~= "auto" then
-    return state.format
-  end
-  if header["Date"] ~= nil and header["Time"] ~= nil and (header["GPS"] ~= nil or header["GPS_2"] ~= nil) then
-    return "edgetx"
-  end
-  return "generic"
-end
-
-local function openReplayFile()
-  resetReplayState()
-
-  if state.logFile == nil or state.logFile == "" then
-    return false, "no log selected"
-  end
-  local path = state.logDir .. state.logFile
-  local fh = io.open(path, "r")
-  if fh == nil then
-    return false, "cannot open log"
-  end
-
-  local headerLine = fh:read("*l")
-  if headerLine == nil then
-    fh:close()
-    return false, "empty log"
-  end
-
-  local headers = parseCsvLine(headerLine)
-  state.header = buildHeaderMap(headers)
-  state.formatActive = detectFormat(state.header)
-  state.fileHandle = fh
-  return true
-end
-
-local function readNextRow()
-  if state.fileHandle == nil then
-    return nil
-  end
-  local line = state.fileHandle:read("*l")
-  if line == nil then
-    return nil
-  end
-  if line == "" then
-    return readNextRow()
-  end
-  return parseCsvLine(line)
-end
-
-local function extractValue(row, header, candidates, default)
-  for i = 1, #candidates do
-    local idx = header[candidates[i]]
-    if idx ~= nil then
-      return safeNumber(row[idx], default or 0)
-    end
-  end
-  return default or 0
-end
-
-local function updateFromRow(row)
-  local header = state.header
-
-  local lat = 0
-  local lon = 0
-  if state.formatActive == "edgetx" and (header["GPS"] ~= nil or header["GPS_2"] ~= nil) then
-    local gpsIdx = header["GPS"] or header["GPS_2"]
-    lat, lon = parseGpsLatLon(row[gpsIdx])
-  else
-    lat = extractValue(row, header, {"lat", "latitude"}, 0)
-    lon = extractValue(row, header, {"lon", "longitude"}, 0)
-  end
-
-  local altM = extractValue(row, header, {"Alt(m)", "alt_m", "altitude_m"}, 0)
-  local gspdKmh = extractValue(row, header, {"GSpd(kmh)"}, 0)
-  if gspdKmh == 0 then
-    local gspdMps = extractValue(row, header, {"speed_mps", "gspd_mps"}, 0)
-    gspdKmh = gspdMps * 3.6
-  end
-
-  local cog = extractValue(row, header, {"Hdg(°)", "course_deg", "heading_deg"}, 0)
-  local sats = extractValue(row, header, {"Sats", "sats"}, 0)
-  local vspd = extractValue(row, header, {"VSpd(m/s)", "vspd_mps"}, 0)
-  local rssi = extractValue(row, header, {"1RSS(dB)", "TRSS(dB)", "rssi", "rssi_db"}, 0)
-  local rqly = extractValue(row, header, {"RQly(%)", "rqly"}, 100)
-  local tqly = extractValue(row, header, {"TQly(%)", "tqly"}, 100)
-  local rxbatt = extractValue(row, header, {"RxBt(V)", "rxbatt_v", "voltage_v"}, 0)
-  local curr = extractValue(row, header, {"Curr(A)", "current_a"}, 0)
-  local capa = extractValue(row, header, {"Capa(mAh)", "capacity_mah"}, 0)
-  local batpct = extractValue(row, header, {"Bat%(%)", "bat_pct", "fuel_pct"}, 0)
-  local pitchRad = extractValue(row, header, {"Ptch(rad)", "pitch_rad"}, 0)
-  local rollRad = extractValue(row, header, {"Roll(rad)", "roll_rad"}, 0)
-  if pitchRad == 0 then
-    local pitchDeg = extractValue(row, header, {"pitch_deg"}, 0)
-    pitchRad = pitchDeg * math.pi / 180
-  end
-  if rollRad == 0 then
-    local rollDeg = extractValue(row, header, {"roll_deg"}, 0)
-    rollRad = rollDeg * math.pi / 180
-  end
-
-  state.lat = lat
-  state.lon = lon
-  state.altM = altM
-  state.gspdKmh = gspdKmh
-  state.cog = cog
-  state.sats = sats
-  state.vspd = vspd
-  state.rssi = math.abs(rssi)
-  state.rqly = rqly
-  state.tqly = tqly
-  state.rxbatt = rxbatt
-  state.curr = curr
-  state.capa = capa
-  state.batpct = batpct
-  state.pitch = pitchRad
-  state.roll = rollRad
-
-  if state.homeLat == nil and lat ~= 0 and lon ~= 0 then
-    state.homeLat = lat
-    state.homeLon = lon
-  end
-
-  if state.homeLat ~= nil and lat ~= 0 and lon ~= 0 then
-    state.homeDist = haversine(state.homeLat, state.homeLon, lat, lon)
-  end
-end
-
-local function startReplay()
-  local ok, err = openReplayFile()
-  if not ok then
-    state.lastError = err
-    return
-  end
-
-  local firstRow = readNextRow()
-  if firstRow == nil then
-    state.lastError = "no data"
-    return
-  end
-
-  local ts = getRowTimeMs(firstRow, state.header, 0)
-  state.baseLogMs = ts
-  state.nextRowMs = ts
-  state.startMs = getTimeMs()
-  state.running = true
-  state.paused = false
-
-  updateFromRow(firstRow)
-
-  local offsetMs = math.max(0, safeNumber(state.startOffsetSec, 0) * 1000)
-  if offsetMs > 0 then
-    local target = state.baseLogMs + offsetMs
-    while state.nextRowMs ~= nil and state.nextRowMs < target do
-      local row = readNextRow()
-      if row == nil then
-        break
-      end
-      local rowTs = getRowTimeMs(row, state.header, state.nextRowMs)
-      state.nextRowMs = rowTs
-      updateFromRow(row)
-    end
-  end
-end
-
-local function advanceReplay()
-  state = getSharedState()
-  if not state.running or state.paused then
-    return
-  end
-  if state.baseLogMs == nil or state.startMs == nil then
-    return
-  end
-
-  local now = getTimeMs()
-  local elapsed = now - state.startMs
-  local speed = math.max(0.1, state.speed or 1)
-  local targetLog = state.baseLogMs + elapsed * speed
-
-  while state.nextRowMs ~= nil and state.nextRowMs <= targetLog do
-    local row = readNextRow()
-    if row == nil then
-      if state.loop then
-        startReplay()
-      else
-        state.running = false
-      end
-      return
-    end
-    local ts = getRowTimeMs(row, state.header, state.nextRowMs)
-    state.nextRowMs = ts
-    updateFromRow(row)
-  end
-end
-
--- ---------------------------------------------------------------------------
--- Ethos Sources
--- ---------------------------------------------------------------------------
-
-local sourceConfig = {
-  { key = "RT_LAT",  name = "ReplayLat",  unit = UNIT_DEGREE, decimals = 6, field = "lat" },
-  { key = "RT_LON",  name = "ReplayLon",  unit = UNIT_DEGREE, decimals = 6, field = "lon" },
-  { key = "RT_ALT",  name = "ReplayAlt",  unit = UNIT_METER,  decimals = 1, field = "altM" },
-  { key = "RT_GSPD", name = "ReplayGSpd", unit = UNIT_KMH,    decimals = 1, field = "gspdKmh" },
-  { key = "RT_COG",  name = "ReplayCOG",  unit = UNIT_DEGREE, decimals = 1, field = "cog" },
-  { key = "RT_SATS", name = "ReplaySats", unit = UNIT_RAW,    decimals = 0, field = "sats" },
-  { key = "RT_VSPD", name = "ReplayVSpd", unit = UNIT_METER_PER_SECOND, decimals = 2, field = "vspd" },
-  { key = "RT_RSSI", name = "ReplayRSSI", unit = UNIT_RAW,    decimals = 0, field = "rssi" },
-  { key = "RT_RQ",   name = "ReplayRQly", unit = UNIT_RAW,    decimals = 0, field = "rqly" },
-  { key = "RT_TQ",   name = "ReplayTQly", unit = UNIT_RAW,    decimals = 0, field = "tqly" },
-  { key = "RT_RXB",  name = "ReplayRxBt", unit = UNIT_VOLTS,  decimals = 2, field = "rxbatt" },
-  { key = "RT_CUR",  name = "ReplayCurr", unit = UNIT_AMPERE, decimals = 2, field = "curr" },
-  { key = "RT_CAP",  name = "ReplayCapa", unit = UNIT_MILLIAMPERE_HOUR, decimals = 0, field = "capa" },
-  { key = "RT_BAT",  name = "ReplayBat%", unit = UNIT_PERCENT, decimals = 0, field = "batpct" },
-  { key = "RT_HOME", name = "ReplayHome", unit = UNIT_METER,  decimals = 1, field = "homeDist" },
-  { key = "RT_PIT",  name = "ReplayPitch", unit = UNIT_RAW,    decimals = 3, field = "pitch" },
-  { key = "RT_ROL",  name = "ReplayRoll",  unit = UNIT_RAW,    decimals = 3, field = "roll" },
-}
-
-local function makeSourceInit(cfg)
-  return function(source)
-    if source == nil then
-      return
-    end
-    if type(source.unit) == "function" then
-      pcall(function() source:unit(cfg.unit) end)
-    end
-    if type(source.decimals) == "function" then
-      pcall(function() source:decimals(cfg.decimals) end)
-    end
-    if type(source.value) == "function" then
-      pcall(function() source:value(0) end)
-    end
-  end
-end
-
-local function makeSourceWakeup(cfg)
-  return function(source)
-    if source == nil or type(source.value) ~= "function" then
-      return
-    end
-    local shared = getSharedState()
-    local value = shared[cfg.field]
-    if value == nil then
-      value = 0
-    end
-    pcall(function() source:value(value) end)
-  end
-end
-
-local function registerSources()
-  if system == nil or type(system.registerSource) ~= "function" then
-    return
-  end
-  for i = 1, #sourceConfig do
-    local cfg = sourceConfig[i]
-    pcall(function()
-      system.registerSource({
-        key = cfg.key,
-        name = cfg.name,
-        init = makeSourceInit(cfg),
-        wakeup = makeSourceWakeup(cfg)
-      })
-    end)
-  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -598,8 +338,8 @@ end
 -- ---------------------------------------------------------------------------
 
 local function refreshLogList()
-  state.logDir = getScriptDir()
-  state.files = listLogFiles(state.logDir)
+  state.logDir = scriptDir
+  state.files = csv.listLogFiles(state.logDir)
   if #state.files == 0 then
     state.files = { "DemoTelemetry.csv" }
   end
@@ -609,19 +349,19 @@ local function refreshLogList()
   state.logFile = state.files[state.fileIndex]
 end
 
+local function saveSettings()
+  config.save(scriptDir, state)
+end
+
 local function create()
-  state.speed = state.speed or 1
-  state.loop = state.loop or false
-  state.startOffsetSec = state.startOffsetSec or 0
-  state.format = state.format or "auto"
+  config.load(scriptDir, state)
   state.files = state.files or {}
   refreshLogList()
-  resetReplayState()
+  replay.resetReplayState(state)
   return {}
 end
 
 local function paint()
-  state = getSharedState()
   local w, h = lcd.getWindowSize()
   local rows = buildTelemetryRows()
   local leftX = 4
@@ -663,39 +403,95 @@ local function configure(widgetInstance)
     function(value)
       state.fileIndex = value
       state.logFile = state.files[state.fileIndex]
+      saveSettings()
     end
   )
 
-  line = form.addLine("Speed (x)")
-  form.addNumberField(line, nil, 1, 10,
-    function() return math.floor(state.speed or 1) end,
-    function(value) state.speed = value end
+  line = form.addLine("Speed")
+  form.addChoiceField(line, form.getFieldSlots(line)[0],
+    speedChoices,
+    function() return getSpeedChoiceIndex() end,
+    function(value) setSpeedChoice(value); saveSettings() end
   )
 
   line = form.addLine("Start offset (s)")
   form.addNumberField(line, nil, 0, 3600,
     function() return math.floor(state.startOffsetSec or 0) end,
-    function(value) state.startOffsetSec = value end
+    function(value) state.startOffsetSec = value; saveSettings() end
   )
 
   line = form.addLine("Format")
   form.addChoiceField(line, form.getFieldSlots(line)[0],
     formatChoices,
     function() return getFormatChoiceIndex() end,
-    function(value) setFormatChoice(value) end
+    function(value) setFormatChoice(value); saveSettings() end
+  )
+
+  line = form.addLine("Max sensor rate")
+  form.addChoiceField(line, form.getFieldSlots(line)[0],
+    rateChoices,
+    function() return getRateChoiceIndex() end,
+    function(value) setRateChoice(value); saveSettings() end
   )
 
   line = form.addLine("Loop")
   form.addBooleanField(line, form.getFieldSlots(line)[0],
     function() return state.loop end,
-    function(value) state.loop = value end
+    function(value) state.loop = value; saveSettings() end
+  )
+
+  line = form.addLine("GPS format")
+  form.addChoiceField(line, form.getFieldSlots(line)[0],
+    gpsFormatChoices,
+    function() return choiceIndex(gpsFormatValues, state.gpsFormat, 1) end,
+    function(v) state.gpsFormat = gpsFormatValues[v] or "decimal"; saveSettings() end
+  )
+
+  line = form.addLine("Altitude unit")
+  form.addChoiceField(line, form.getFieldSlots(line)[0],
+    altUnitChoices,
+    function() return choiceIndex(altUnitValues, state.altUnit, 1) end,
+    function(v) state.altUnit = altUnitValues[v] or "m"; saveSettings() end
+  )
+
+  line = form.addLine("Speed unit")
+  form.addChoiceField(line, form.getFieldSlots(line)[0],
+    speedUnitChoices,
+    function() return choiceIndex(speedUnitValues, state.speedUnit, 1) end,
+    function(v) state.speedUnit = speedUnitValues[v] or "kmh"; saveSettings() end
+  )
+
+  line = form.addLine("VSpd unit")
+  form.addChoiceField(line, form.getFieldSlots(line)[0],
+    vspdUnitChoices,
+    function() return choiceIndex(vspdUnitValues, state.vspdUnit, 1) end,
+    function(v) state.vspdUnit = vspdUnitValues[v] or "ms"; saveSettings() end
+  )
+
+  line = form.addLine("Attitude unit")
+  form.addChoiceField(line, form.getFieldSlots(line)[0],
+    attitudeUnitChoices,
+    function() return choiceIndex(attitudeUnitValues, state.attitudeUnit, 1) end,
+    function(v) state.attitudeUnit = attitudeUnitValues[v] or "rad"; saveSettings() end
   )
 end
 
 local function wakeup()
-  state = getSharedState()
+  -- Process deferred commands from menu() (runs with preemption support)
+  if state.pendingStart then
+    state.pendingStart = nil
+    config.load(scriptDir, state)
+    refreshLogList()
+    replay.startReplay(state, csv, getTimeMs)
+  end
+  if state.pendingJump then
+    local secs = state.pendingJump
+    state.pendingJump = nil
+    replay.jumpForward(state, csv, getTimeMs, secs)
+  end
+
   if state.running then
-    advanceReplay()
+    replay.advanceReplay(state, csv, getTimeMs)
   end
   local nowMs = getTimeMs()
   if lcd ~= nil and type(lcd.invalidate) == "function" then
@@ -709,10 +505,27 @@ end
 
 local function menu()
   return {
-    { "Replay: Start", function() startReplay() end },
-    { "Replay: Pause/Resume", function() state.paused = not state.paused end },
-    { "Replay: Stop", function() state.running = false end },
-    { "Replay: Restart", function() startReplay() end },
+    { "Replay: Start", function() state.pendingStart = true end },
+    { "Replay: Pause/Resume", function()
+        if state.running then
+          if state.paused then
+            if state.pauseStartMs then
+              state.pausedElapsed = (state.pausedElapsed or 0) + (getTimeMs() - state.pauseStartMs)
+              state.pauseStartMs = nil
+            end
+            state.paused = false
+          else
+            state.pauseStartMs = getTimeMs()
+            state.paused = true
+          end
+        end
+      end },
+    { "Replay: Stop", function()
+        state.running = false
+        replay.closeFileHandle(state)
+      end },
+    { "Jump +1 min", function() state.pendingJump = 60 end },
+    { "Jump +5 min", function() state.pendingJump = 300 end },
   }
 end
 
@@ -730,7 +543,7 @@ end
 
 local function init()
   refreshLogList()
-  registerSources()
+  sources.registerSources(getSharedState)
   if system and system.registerWidget then
     system.registerWidget(buildWidgetDef())
   end
