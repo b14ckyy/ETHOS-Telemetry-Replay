@@ -152,7 +152,7 @@ Unit conversions are applied both to the ETHOS source output and the widget disp
 
 ## Using the sensors in ETHOS
 
-Once the widget is on a screen, the replay sensors can be used like any other ETHOS source.
+Once the widget is on a screen, the user can enable the virtual LUA sensors as background tasks in the model setup screen. Then the replay sensors can be used like any other ETHOS source.
 
 Examples:
 
